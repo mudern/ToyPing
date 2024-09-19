@@ -9,20 +9,18 @@ import (
 )
 
 const (
-	ICMPTypeEchoRequest = 8 // ICMP Echo Request 类型
-	ICMPTypeEchoReply   = 0 // ICMP Echo Reply 类型
+	ICMPTypeEchoRequest = 8
+	ICMPTypeEchoReply   = 0
 )
 
-// ICMP 结构体定义
 type ICMP struct {
-	Type     uint8  // ICMP 类型
-	Code     uint8  // ICMP 代码
-	Checksum uint16 // 校验和
-	ID       uint16 // 请求 ID
-	Seq      uint16 // 序列号
+	Type     uint8
+	Code     uint8
+	Checksum uint16
+	ID       uint16
+	Seq      uint16
 }
 
-// Serialize 方法将 ICMP 结构体序列化为字节流
 func (icmp *ICMP) Serialize() []byte {
 	buf := make([]byte, 8)
 	buf[0] = icmp.Type
@@ -33,7 +31,6 @@ func (icmp *ICMP) Serialize() []byte {
 	return buf
 }
 
-// Deserialize 方法将字节流反序列化为 ICMP 结构体
 func (icmp *ICMP) Deserialize(data []byte) {
 	icmp.Type = data[0]
 	icmp.Code = data[1]
@@ -42,7 +39,6 @@ func (icmp *ICMP) Deserialize(data []byte) {
 	icmp.Seq = binary.BigEndian.Uint16(data[6:8])
 }
 
-// CalculateChecksum 计算 ICMP 校验和
 func CalculateChecksum(data []byte) uint16 {
 	var sum uint32
 	for i := 0; i < len(data); i += 2 {
@@ -58,8 +54,7 @@ func CalculateChecksum(data []byte) uint16 {
 	return uint16(^sum)
 }
 
-// SendPing 发送 Ping 请求
-func SendPing(address string, count int) {
+func SendPing(address string, count, interval, size, timeout int, ttl uint8) {
 	conn, err := net.Dial("ip4:icmp", address)
 	if err != nil {
 		fmt.Println("Error:", err)
@@ -67,7 +62,7 @@ func SendPing(address string, count int) {
 	}
 	defer conn.Close()
 
-	fmt.Printf("正在 Ping %s 具有 32 字节的数据:\n", address)
+	fmt.Printf("正在 Ping %s 具有 %d 字节的数据:\n", address, size)
 
 	var totalSent, totalReceived int
 	var minRTT, maxRTT, totalRTT time.Duration
@@ -83,6 +78,11 @@ func SendPing(address string, count int) {
 		icmp.Checksum = CalculateChecksum(icmpData)
 		icmpData = icmp.Serialize()
 
+		// 调整数据包大小
+		if len(icmpData) < size {
+			icmpData = append(icmpData, make([]byte, size-len(icmpData))...)
+		}
+
 		start := time.Now()
 		_, err := conn.Write(icmpData)
 		if err != nil {
@@ -92,7 +92,7 @@ func SendPing(address string, count int) {
 		totalSent++
 
 		buf := make([]byte, 1500)
-		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
 		n, err := conn.Read(buf)
 		if err != nil {
 			fmt.Println("请求超时。")
@@ -100,10 +100,10 @@ func SendPing(address string, count int) {
 		}
 
 		ipHeader := buf[:20] // IP 头部的长度是 20 字节
-		ttl := ipHeader[8]   // TTL 字段在 IP 头部的第 9 字节
+		receivedTTL := ipHeader[8]
 
 		reply := ICMP{}
-		reply.Deserialize(buf[20:n]) // 跳过 IP 头部
+		reply.Deserialize(buf[20:n])
 		if reply.Type == ICMPTypeEchoReply && reply.ID == icmp.ID {
 			rtt := time.Since(start)
 			totalReceived++
@@ -115,12 +115,12 @@ func SendPing(address string, count int) {
 			}
 			totalRTT += rtt
 
-			fmt.Printf("来自 %s 的回复: 字节=32 时间=%vms TTL=%d\n", address, rtt.Milliseconds(), ttl)
+			fmt.Printf("来自 %s 的回复: 字节=%d 时间=%vms TTL=%d\n", address, size, rtt.Milliseconds(), receivedTTL)
 		} else {
 			fmt.Println("收到无效的回复。")
 		}
 
-		time.Sleep(1 * time.Second)
+		time.Sleep(time.Duration(interval) * time.Second)
 	}
 
 	fmt.Printf("\n%s 的 Ping 统计信息:\n", address)
